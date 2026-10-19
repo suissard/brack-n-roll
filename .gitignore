@@ -1,0 +1,24 @@
+# Dépôts de dépendances
+__pycache__/
+*.py[cod]
+*$py.class
+venv/
+.env
+.env.local
+node_modules/
+dist/
+build/
+*.log
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+
+# Données et résultats du tournoi (à ne pas versionner)
+challenges/*/submissions/
+solutions/*/output/
+*.json
+!challenges/**/exemple.json
