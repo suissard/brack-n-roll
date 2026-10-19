@@ -1,0 +1,10 @@
+[
+  { "id": "team-1", "name": "Alpha", "initialSeed": 1 },
+  { "id": "team-2", "name": "Bravo", "initialSeed": 2 },
+  { "id": "team-3", "name": "Charlie", "initialSeed": 3 },
+  { "id": "team-4", "name": "Delta", "initialSeed": 4 },
+  { "id": "team-5", "name": "Echo", "initialSeed": 5 },
+  { "id": "team-6", "name": "Foxtrot", "initialSeed": 6 },
+  { "id": "team-7", "name": "Golf", "initialSeed": 7 },
+  { "id": "team-8", "name": "Hotel", "initialSeed": 8 }
+]

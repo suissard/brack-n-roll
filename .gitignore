@@ -21,4 +21,10 @@ build/
 challenges/*/submissions/
 solutions/*/output/
 *.json
+# ... sauf la configuration du projet et les jeux de données de test
+!package.json
+!package-lock.json
+!tsconfig.json
+!tsconfig.build.json
+!tests/fixtures/*.json
 !challenges/**/exemple.json
