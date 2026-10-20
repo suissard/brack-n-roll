@@ -6,6 +6,8 @@ interface Props {
   teams: Record<string, EnrichedTeam>;
   busy: boolean;
   onAmend: (eventId: string, payload: TournamentEventPayload) => void;
+  onDelete: (eventId: string) => void;
+  onRewind: (eventId: string) => void;
 }
 
 function summarize(payload: TournamentEventPayload, teams: Record<string, EnrichedTeam>): string {
@@ -14,6 +16,8 @@ function summarize(payload: TournamentEventPayload, teams: Record<string, Enrich
       return `Graine PRNG ${payload.prngSeed}`;
     case 'TEAMS_SEEDED':
       return `${payload.teams.length} équipes → ${payload.blockId}`;
+    case 'TEAM_RENAMED':
+      return `${payload.teamId} renommée en « ${payload.name} »`;
     case 'TOURNAMENT_STARTED':
       return 'Démarrage du tournoi';
     case 'MATCH_RESULT_REPORTED': {
@@ -81,11 +85,36 @@ function AmendForm({
   );
 }
 
-export function TimelinePanel({ timeline, teams, busy, onAmend }: Props) {
+export function TimelinePanel({ timeline, teams, busy, onAmend, onDelete, onRewind }: Props) {
   const [openEventId, setOpenEventId] = useState<string | null>(null);
   const [newestFirst, setNewestFirst] = useState(true);
 
   const events = newestFirst ? timeline.slice().reverse() : timeline;
+  const headIndex = timeline.length - 1;
+
+  const confirmDelete = (event: TournamentEvent) => {
+    const label = event.payload.type;
+    if (
+      !window.confirm(
+        `Supprimer l'événement #${event.sequenceIndex} (${label}) ?\n\nLa suite de la timeline sera rejouée et les événements incompatibles seront orphelinés.`,
+      )
+    ) {
+      return;
+    }
+    onDelete(event.eventId);
+  };
+
+  const confirmRewind = (event: TournamentEvent) => {
+    const removed = headIndex - event.sequenceIndex;
+    if (
+      !window.confirm(
+        `Revenir juste après l'événement #${event.sequenceIndex} ?\n\n${removed} événement(s) suivant(s) seront supprimés.`,
+      )
+    ) {
+      return;
+    }
+    onRewind(event.eventId);
+  };
 
   return (
     <section className="panel">
@@ -123,6 +152,26 @@ export function TimelinePanel({ timeline, teams, busy, onAmend }: Props) {
                   {openEventId === event.eventId ? 'Fermer' : 'Amender'}
                 </button>
               )}
+              <span className="event-actions">
+                <button
+                  type="button"
+                  className="mini ghost danger"
+                  disabled={busy || event.sequenceIndex === 0}
+                  title="Supprimer cette ligne et rejouer la suite"
+                  onClick={() => confirmDelete(event)}
+                >
+                  Supprimer
+                </button>
+                <button
+                  type="button"
+                  className="mini ghost"
+                  disabled={busy || event.sequenceIndex === headIndex}
+                  title="Revenir juste après cet événement"
+                  onClick={() => confirmRewind(event)}
+                >
+                  Revenir ici
+                </button>
+              </span>
             </div>
             {openEventId === event.eventId && (
               <AmendForm event={event} teams={teams} busy={busy} onAmend={onAmend} />

@@ -11,7 +11,13 @@
  * strictement déterministe.
  */
 
-const DB_STORAGE_KEY = 'algo-tournament::fake-db::v1';
+const DB_STORAGE_KEY = 'brack-n-roll::fake-db::v1';
+
+/**
+ * Clé historique (ancien nom du projet). Elle n'est plus écrite mais sert de
+ * source de migration pour ne pas perdre les données locales existantes.
+ */
+const LEGACY_DB_STORAGE_KEY = 'algo-tournament::fake-db::v1';
 
 interface DbShape {
   collections: Record<string, Record<string, unknown>>;
@@ -35,19 +41,41 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+/**
+ * Copie une clé `localStorage` historique vers la nouvelle clé si celle-ci
+ * n'existe pas encore. Utilisé uniquement pour la transition de renommage.
+ */
+export function migrateLegacyStorageKey(legacyKey: string, storageKey: string): void {
+  if (typeof localStorage === 'undefined') return;
+  try {
+    if (localStorage.getItem(storageKey) !== null) return;
+    const legacy = localStorage.getItem(legacyKey);
+    if (legacy !== null) localStorage.setItem(storageKey, legacy);
+  } catch {
+    // localStorage indisponible ou quota dépassé : on repart d'une base vide.
+  }
+}
+
 export class FakeDatabase {
   private shape: DbShape;
   private readonly latencyMs: number;
+  private readonly storageKey: string;
 
-  constructor(latencyMs = 160) {
+  constructor(
+    latencyMs = 160,
+    storageKey = DB_STORAGE_KEY,
+    legacyStorageKey: string | null = null,
+  ) {
     this.latencyMs = latencyMs;
+    this.storageKey = storageKey;
+    if (legacyStorageKey) migrateLegacyStorageKey(legacyStorageKey, storageKey);
     this.shape = this.read();
   }
 
   private read(): DbShape {
     if (typeof localStorage === 'undefined') return emptyShape();
     try {
-      const raw = localStorage.getItem(DB_STORAGE_KEY);
+      const raw = localStorage.getItem(this.storageKey);
       if (!raw) return emptyShape();
       const parsed = JSON.parse(raw) as DbShape;
       if (!parsed || typeof parsed !== 'object' || typeof parsed.collections !== 'object') {
@@ -66,7 +94,7 @@ export class FakeDatabase {
   private write(): void {
     if (typeof localStorage === 'undefined') return;
     try {
-      localStorage.setItem(DB_STORAGE_KEY, JSON.stringify(this.shape));
+      localStorage.setItem(this.storageKey, JSON.stringify(this.shape));
     } catch {
       // quota dépassé ou stockage indisponible : on ignore silencieusement.
     }
@@ -129,7 +157,7 @@ export class FakeDatabase {
       keys[name] = Object.keys(rows).length;
     }
     const raw =
-      typeof localStorage === 'undefined' ? '' : localStorage.getItem(DB_STORAGE_KEY) ?? '';
+      typeof localStorage === 'undefined' ? '' : localStorage.getItem(this.storageKey) ?? '';
     return {
       revision: this.shape.revision,
       updatedAt: this.shape.updatedAt,
@@ -140,4 +168,4 @@ export class FakeDatabase {
   }
 }
 
-export const db = new FakeDatabase();
+export const db = new FakeDatabase(160, DB_STORAGE_KEY, LEGACY_DB_STORAGE_KEY);

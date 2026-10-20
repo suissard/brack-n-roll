@@ -1,6 +1,8 @@
 import type {
+  DeleteEventResult,
   OrphanedEventInfo,
   RebaseResult,
+  RewindResult,
   SerializedTournamentSnapshot,
   TournamentEvent,
   TournamentEventPayload,
@@ -120,50 +122,31 @@ export class TimeMachine {
     this.snapshots.clear();
   }
 
-  /**
-   * Réécrit un événement passé et rejoue causalement toute la queue.
-   *
-   * Les événements aval devenus incompatibles (match qui n'existe plus,
-   * tie-breaker obsolète, ...) sont orphelins ; les autres sont conservés et
-   * re-appliqués dans le nouvel ordre.
-   */
-  amendEvent(
-    targetEventId: string,
-    newPayload: TournamentEventPayload,
-    timestamp?: number,
-  ): RebaseResult {
-    const k = this.timeline.findIndex((event) => event.eventId === targetEventId);
-    if (k < 0) throw new Error(`TimeMachine: événement introuvable "${targetEventId}"`);
-    if (k === 0) throw new Error('TimeMachine: TOURNAMENT_INITIALIZED ne peut pas être amendé');
-
-    const originalTimestamp = this.timeline[k].timestamp;
-    const tailEvents = this.timeline.slice(k + 1);
-
-    const snapshot = this.getNearestSnapshotBefore(k - 1);
+  /** Restaure le plus proche snapshot ≤ `targetIndex` puis rejoue jusqu'à lui. */
+  private restoreBefore(targetIndex: number): void {
+    const snapshot = this.getNearestSnapshotBefore(targetIndex);
     if (!snapshot) throw new Error('TimeMachine: aucun snapshot disponible pour la restauration');
     this.host.restoreSnapshot(snapshot);
-
-    // Rejoue les événements déjà validés entre le snapshot et k-1.
-    for (let i = snapshot.sequenceIndex + 1; i <= k - 1; i++) {
-      this.host.applyEventPayload(this.timeline[i].payload);
+    for (let i = snapshot.sequenceIndex + 1; i <= targetIndex; i++) {
+      const event = this.timeline[i];
+      if (event) this.host.applyEventPayload(event.payload);
     }
+  }
 
-    // Tronque la timeline à k (l'événement cible est remplacé).
-    this.timeline = this.timeline.slice(0, k);
+  private purgeSnapshotsAbove(sequenceIndex: number): void {
+    for (const key of [...this.snapshots.keys()]) {
+      if (key > sequenceIndex) this.snapshots.delete(key);
+    }
+  }
 
-    // Applique la modification.
-    this.host.applyEventPayload(newPayload);
-    const amendedHash = this.host.getStateHash();
-    const amendedEvent: TournamentEvent = {
-      eventId: `evt_${k}_${amendedHash.slice(0, 6)}`,
-      sequenceIndex: k,
-      timestamp: timestamp ?? originalTimestamp,
-      payload: newPayload,
-      stateHash: amendedHash,
-    };
-    this.timeline.push(amendedEvent);
-    this.saveSnapshotIfNeeded(k, this.host.captureSnapshot());
-
+  /**
+   * Rejoue une queue d'événements contre le nouvel état courant. Les événements
+   * devenus incompatibles sont orphelins ; les autres sont conservés et
+   * ré-appliqués (éventuellement réécrits pour une clé nominative).
+   */
+  private replayTail(
+    tailEvents: readonly TournamentEvent[],
+  ): { appliedEvents: TournamentEvent[]; orphanedEvents: OrphanedEventInfo[] } {
     const appliedEvents: TournamentEvent[] = [];
     const orphanedEvents: OrphanedEventInfo[] = [];
 
@@ -189,16 +172,111 @@ export class TimeMachine {
       appliedEvents.push(replayed);
     }
 
-    // Purge les snapshots situés au-delà de la nouvelle tête.
-    const headIndex = this.timeline.length - 1;
-    for (const key of [...this.snapshots.keys()]) {
-      if (key > headIndex) this.snapshots.delete(key);
-    }
+    return { appliedEvents, orphanedEvents };
+  }
+
+  /**
+   * Réécrit un événement passé et rejoue causalement toute la queue.
+   *
+   * Les événements aval devenus incompatibles (match qui n'existe plus,
+   * tie-breaker obsolète, ...) sont orphelins ; les autres sont conservés et
+   * re-appliqués dans le nouvel ordre.
+   */
+  amendEvent(
+    targetEventId: string,
+    newPayload: TournamentEventPayload,
+    timestamp?: number,
+  ): RebaseResult {
+    const k = this.timeline.findIndex((event) => event.eventId === targetEventId);
+    if (k < 0) throw new Error(`TimeMachine: événement introuvable "${targetEventId}"`);
+    if (k === 0) throw new Error('TimeMachine: TOURNAMENT_INITIALIZED ne peut pas être amendé');
+
+    const originalTimestamp = this.timeline[k].timestamp;
+    const tailEvents = this.timeline.slice(k + 1);
+
+    this.restoreBefore(k - 1);
+    // Tronque la timeline à k (l'événement cible est remplacé).
+    this.timeline = this.timeline.slice(0, k);
+    this.purgeSnapshotsAbove(k - 1);
+
+    // Applique la modification.
+    this.host.applyEventPayload(newPayload);
+    const amendedHash = this.host.getStateHash();
+    const amendedEvent: TournamentEvent = {
+      eventId: `evt_${k}_${amendedHash.slice(0, 6)}`,
+      sequenceIndex: k,
+      timestamp: timestamp ?? originalTimestamp,
+      payload: newPayload,
+      stateHash: amendedHash,
+    };
+    this.timeline.push(amendedEvent);
+    this.saveSnapshotIfNeeded(k, this.host.captureSnapshot());
+
+    const { appliedEvents, orphanedEvents } = this.replayTail(tailEvents);
+    this.purgeSnapshotsAbove(this.timeline.length - 1);
 
     return {
       appliedEvents,
       orphanedEvents,
       newHeadStateHash: this.host.getStateHash(),
     };
+  }
+
+  /**
+   * Supprime un événement passé et rejoue causalement la queue.
+   *
+   * C'est un `amendEvent` sans remplacement : l'effet de l'événement disparaît
+   * et les événements suivants sont soit rejoués, soit orphelinés.
+   */
+  deleteEvent(targetEventId: string): DeleteEventResult {
+    const k = this.timeline.findIndex((event) => event.eventId === targetEventId);
+    if (k < 0) throw new Error(`TimeMachine: événement introuvable "${targetEventId}"`);
+    if (k === 0) throw new Error('TimeMachine: TOURNAMENT_INITIALIZED ne peut pas être supprimé');
+
+    const removedEvent = this.timeline[k];
+    const tailEvents = this.timeline.slice(k + 1);
+
+    this.restoreBefore(k - 1);
+    this.timeline = this.timeline.slice(0, k);
+    this.purgeSnapshotsAbove(k - 1);
+
+    const { appliedEvents, orphanedEvents } = this.replayTail(tailEvents);
+    this.purgeSnapshotsAbove(this.timeline.length - 1);
+
+    return {
+      removedEvent,
+      appliedEvents,
+      orphanedEvents,
+      newHeadStateHash: this.host.getStateHash(),
+    };
+  }
+
+  /**
+   * Remonte le temps : tronque la timeline juste après `targetEventId` et
+   * restaure l'état correspondant. Les événements postérieurs sont supprimés
+   * (contrairement à `amendEvent`, ils ne sont pas rejoués).
+   */
+  rewindTo(targetEventId: string): RewindResult {
+    const k = this.timeline.findIndex((event) => event.eventId === targetEventId);
+    if (k < 0) throw new Error(`TimeMachine: événement introuvable "${targetEventId}"`);
+
+    const removedEvents = this.timeline.slice(k + 1);
+    if (removedEvents.length === 0) {
+      return { removedEvents: [], newHeadStateHash: this.host.getStateHash() };
+    }
+
+    const timelineBefore = this.timeline;
+    const snapshot = this.getNearestSnapshotBefore(k);
+    if (!snapshot) throw new Error('TimeMachine: aucun snapshot disponible pour la restauration');
+    this.host.restoreSnapshot(snapshot);
+    for (let i = snapshot.sequenceIndex + 1; i <= k; i++) {
+      const event = timelineBefore[i];
+      if (event) this.host.applyEventPayload(event.payload);
+    }
+
+    this.timeline = timelineBefore.slice(0, k + 1);
+    this.purgeSnapshotsAbove(k);
+
+    return { removedEvents, newHeadStateHash: this.host.getStateHash() };
   }
 }

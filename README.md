@@ -1,4 +1,4 @@
-# algo-tournament
+# Brack'n'Roll
 
 Moteur algorithmique de tournoi modulaire (**DAG de blocs**) avec **Time Machine**
 (Event Sourcing + Causal Replay), écrit en **TypeScript strict**, sans aucune
@@ -85,7 +85,7 @@ de test, **sans backend** : un faux client de base de données persiste dans le
 npm run web:dev     # → http://localhost:5174
 ```
 
-Deux vues sont disponibles depuis l'en-tête :
+Trois vues sont disponibles depuis l'en-tête :
 
 ### Vue « Tournoi » (par défaut, orientée spectateurs)
 
@@ -107,16 +107,57 @@ Deux vues sont disponibles depuis l'en-tête :
 
 ### Vue « Console » (pilotage et debug)
 
-- **Classement** live (points, Buchholz, différence, série, statut) avec bouton
-  d'**abandon** d'une équipe.
+- **Classement** live (points, Buchholz, différence, série, statut) avec
+  **renommage en ligne** des équipes et bouton d'**abandon**.
 - **Matchs** : saisie des scores (ou victoire rapide) sur les matchs `READY`,
   bascule vers la liste complète des matchs.
+- **Seeding** : réordonnez les équipes par **glisser-déposer**, flèches ou
+  saisie directe d'un **numéro de seed**. Chaque modification réécrit
+  `TEAMS_SEEDED` dans la Time Machine et rejoue tout le tournoi.
 - **Blocs du DAG** : état de chaque bloc, nombre de matchs, entrées/sorties.
-- **Time Machine** : journal d'événements et **Causal Replay** — on réécrit un
-  résultat passé (`Amender`) et les événements suivants sont rejoués ou
-  orphelinés, avec un récapitulatif.
-- **Barre d'outils** : choix du scénario de démo, démarrage du tournoi,
-  rechargement depuis la « base », purge du stockage, révision et hash d'état.
+- **Time Machine** : journal d'événements et **Causal Replay** —
+  - **Amender** un résultat passé et voir les événements suivants rejoués ou
+    orphelinés ;
+  - **Supprimer** une ligne de la timeline et observer ses répercussions ;
+  - **Revenir ici** pour remonter le temps (troncature de la timeline) ;
+  - raccourci **◀ Revenir d'un événement** dans la barre d'outils.
+- **Barre d'outils** : choix du scénario de démo, démarrage du tournoi, retour
+  d'un événement, rechargement depuis la « base », purge du stockage, révision
+  et hash d'état.
+
+### Vue « Formats » (éditeur de tournoi)
+
+- **Modèles intégrés** dérivés des scénarios de démo (suisse + top cut, double
+  élimination, toutes rondes) et **format vierge**.
+- **Édition complète du format** : nom, description, graine PRNG, barème de
+  points, seeding ordonné des équipes (flèches et numéro de seed).
+- **Blocs** : type (`SWISS`, `BRACKET`, `ROUND_ROBIN`, `MERGER`), identifiant,
+  stage, ronde, journée (`roundIndex`), condition de court-circuit et critères
+  de classement.
+- **Connecteurs** : source/cible, mode `BATCH` / `STREAMING`, filtre du DSL
+  (`TOP_N`, `WINNERS`, `RANGE`…), transformation de seeding, politique de
+  réinitialisation des statistiques et stage cible.
+- **Validation en direct** : identifiants dupliqués, bloc d'entrée manquant,
+  connecteur orphelin ou auto-référent, seeding incohérent.
+- **Sauvegarde locale** dans un **second faux backend** (`formatApi`), avec sa
+  propre clé `localStorage`, sa révision et sa taille. Les formats intégrés
+  restent immuables ; les formats personnalisés peuvent être dupliqués,
+  modifiés et supprimés.
+- **Ouvrir dans la console** : instancie le format (`createGraphFromFormat`),
+  seed les équipes, démarre le tournoi et le persiste dans la base du tournoi
+  courant.
+
+Côté moteur, un format est un document JSON pur (`TournamentFormat`) :
+
+```typescript
+import { createGraphFromFormat, validateTournamentFormat } from './src/index';
+
+const issues = validateTournamentFormat(format); // [] si le DAG est cohérent
+const graph = createGraphFromFormat(format, { autoStart: true });
+```
+
+`TournamentGraph.toFormat({ id, name })` fait l'opération inverse : il exporte
+la topologie et le seeding initial d'un tournoi existant, sans les résultats.
 
 ### Architecture du front
 
@@ -133,6 +174,11 @@ Le moteur est importé directement (`../../../src/index`), sans duplication.
 Pour brancher une vraie base de données plus tard, il suffit de réimplémenter
 `FakeDatabase` / `tournamentApi` avec la même interface asynchrone
 (`load`, `save`, `clear`, `stats`).
+
+Les formats disposent de leur propre façade `formatApi` et de leur propre
+instance `FakeDatabase` (clé `brack-n-roll::formats-fake-db::v1`). Le
+stockage des formats est donc totalement indépendant du tournoi en cours ; une
+future base de données pourra être branchée sans toucher à l'éditeur.
 
 ### Build de la console
 
@@ -228,6 +274,16 @@ charges :
 `tests/core.spec.ts` couvre en plus le PRNG, le hash, le classement,
 le round-robin complet, le merger et le round-trip de sérialisation.
 
+`tests/time-machine-edit.spec.ts` couvre l'édition de la timeline et du seeding :
+renommage d'équipe réversible, suppression d'une ligne (`deleteEvent`),
+retour en arrière (`rewindTo`) et réécriture du seeding (`reseedTeams`) avec ses
+conséquences sur les appariements et les résultats suivants.
+
+`tests/formats.spec.ts` couvre les formats déclaratifs : export
+(`toFormat`) sans la timeline, reconstruction jouable
+(`createGraphFromFormat`), déterminisme du seeding et validation des
+incohérences de topologie.
+
 ## Arborescence
 
 ```text
@@ -242,6 +298,7 @@ tests/
 ├── fixtures/     # Jeux de données JSON
 ├── helpers.ts    # Helpers partagés (chargement, matchs READY)
 ├── tournament-engine.spec.ts
+├── time-machine-edit.spec.ts
 └── core.spec.ts
 web/              # Console React (Vite) — voir section dédiée
 ```

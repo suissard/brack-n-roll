@@ -1,5 +1,6 @@
 export * from './types/domain.types';
 export * from './types/events.types';
+export * from './types/format.types';
 
 export { DeterministicPRNG } from './utils/prng';
 export { StateHasher } from './utils/hash';
@@ -22,4 +23,12 @@ export { MergerBlock } from './blocks/merger-block';
 export type { MergerBlockConfig } from './blocks/merger-block';
 
 export { TournamentGraph, createBlock, DEFAULT_POINTS_CONFIG } from './engine/tournament-graph';
-export type { TournamentGraphOptions } from './engine/tournament-graph';
+export type { ReseedResult, TournamentGraphOptions } from './engine/tournament-graph';
+export {
+  createGraphFromFormat,
+  validateTournamentFormat,
+  emptyTournamentFormat,
+  cloneFormat,
+  defaultPointsConfig,
+} from './engine/format-builder';
+export type { BuildFormatOptions } from './engine/format-builder';

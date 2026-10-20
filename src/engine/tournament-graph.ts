@@ -7,7 +7,9 @@ import type {
 } from '../types/domain.types';
 import { DEFAULT_RANKING_CRITERIA } from '../types/domain.types';
 import type {
+  DeleteEventResult,
   RebaseResult,
+  RewindResult,
   SerializedTournamentFull,
   SerializedTournamentSnapshot,
   TournamentEvent,
@@ -24,6 +26,7 @@ import { BracketRoundBlock, type BracketBlockConfig } from '../blocks/bracket-bl
 import { SwissRoundBlock, type SwissBlockConfig } from '../blocks/swiss-block';
 import { RoundRobinBlock, type RoundRobinBlockConfig } from '../blocks/round-robin-block';
 import { MergerBlock, type MergerBlockConfig } from '../blocks/merger-block';
+import type { TournamentFormat, TournamentFormatMeta } from '../types/format.types';
 
 export const DEFAULT_POINTS_CONFIG: PointsConfig = {
   win: 3,
@@ -39,6 +42,12 @@ export interface TournamentGraphOptions {
   pointsConfig?: Partial<PointsConfig>;
   snapshotInterval?: number;
   maxSnapshots?: number;
+}
+
+/** Résultat d'une réécriture du seeding via la Time Machine. */
+export interface ReseedResult extends RebaseResult {
+  /** Événement `TEAMS_SEEDED` réécrit. */
+  targetEventId: string;
 }
 
 interface BlockDefinition {
@@ -79,6 +88,7 @@ export class TournamentGraph implements TimeMachineHost {
   private manualTieBreakers: Map<string, string[]> = new Map();
   private retained: Map<string, Set<string>> = new Map();
   private completedBlocks: Set<string> = new Set();
+  private started = false;
 
   constructor(options: TournamentGraphOptions = {}) {
     this.initialPrngSeed = options.prngSeed ?? 42;
@@ -181,6 +191,18 @@ export class TournamentGraph implements TimeMachineHost {
     return this.dispatch(payload);
   }
 
+  /** Renomme une équipe (l'ancien nom reste dans les snapshots, donc Time Machine). */
+  renameTeam(teamId: string, name: string): TournamentEvent {
+    const trimmed = name.trim();
+    if (trimmed.length === 0) {
+      throw new Error('TournamentGraph: le nom d\'équipe ne peut pas être vide');
+    }
+    if (!this.registry.hasTeam(teamId)) {
+      throw new Error(`TournamentGraph: équipe introuvable "${teamId}"`);
+    }
+    return this.dispatch({ type: 'TEAM_RENAMED', teamId, name: trimmed });
+  }
+
   dropTeam(teamId: string, reason?: string): TournamentEvent {
     return this.dispatch({
       type: 'TEAM_DROPPED',
@@ -211,6 +233,56 @@ export class TournamentGraph implements TimeMachineHost {
 
   overrideSeeds(blockId: string, orderedTeamIds: string[]): TournamentEvent {
     return this.dispatch({ type: 'MANUAL_SEED_OVERRIDE', blockId, orderedTeamIds });
+  }
+
+  /**
+   * Réécrit le seeding d'un bloc d'entrée en amendant l'événement
+   * `TEAMS_SEEDED` correspondant. Toute la suite de la timeline est rejouée :
+   * les appariements sont recalculés et les résultats devenus incompatibles
+   * sont orphelinés. C'est le mécanisme « conséquences » du seeding.
+   */
+  reseedTeams(blockId: string, orderedTeamIds: string[]): ReseedResult {
+    const timeline = this.timeMachine.getTimeline();
+    let seedEvent: TournamentEvent | undefined;
+    for (let i = timeline.length - 1; i >= 0; i--) {
+      const payload = timeline[i].payload;
+      if (payload.type === 'TEAMS_SEEDED' && payload.blockId === blockId) {
+        seedEvent = timeline[i];
+        break;
+      }
+    }
+    if (!seedEvent || seedEvent.payload.type !== 'TEAMS_SEEDED') {
+      throw new Error(`TournamentGraph: aucun seeding à réécrire pour le bloc "${blockId}"`);
+    }
+
+    const baseTeams = seedEvent.payload.teams;
+    const uniqueIds = new Set(orderedTeamIds);
+    if (uniqueIds.size !== orderedTeamIds.length) {
+      throw new Error('TournamentGraph: le seeding contient des équipes en double');
+    }
+    const baseIds = new Set(baseTeams.map((team) => team.id));
+    if (
+      orderedTeamIds.length !== baseTeams.length ||
+      orderedTeamIds.some((id) => !baseIds.has(id))
+    ) {
+      throw new Error('TournamentGraph: le seeding doit contenir exactement les équipes seedées');
+    }
+
+    const byId = new Map(baseTeams.map((team) => [team.id, team]));
+    const teams = orderedTeamIds.map((id, index) => {
+      const base = byId.get(id) as TeamBase;
+      return {
+        ...structuredClone(base),
+        initialSeed: index + 1,
+      };
+    });
+
+    const result = this.amendEvent(seedEvent.eventId, {
+      type: 'TEAMS_SEEDED',
+      blockId,
+      teams,
+    });
+    return { ...result, targetEventId: seedEvent.eventId };
   }
 
   resolveTieBreaker(connectorId: string, orderedTeamIds: string[]): TournamentEvent {
@@ -289,6 +361,46 @@ export class TournamentGraph implements TimeMachineHost {
     };
   }
 
+  /**
+   * Exporte la topologie courante sous forme de format déclaratif réutilisable.
+   * La timeline (résultats joués) n'est pas conservée : seul le seeding initial
+   * et le DAG sont exportés.
+   */
+  toFormat(meta: TournamentFormatMeta): TournamentFormat {
+    const timeline = this.timeMachine.getTimeline();
+    const seedEvent = timeline.find((event) => event.payload.type === 'TEAMS_SEEDED');
+    const seededTeams =
+      seedEvent && seedEvent.payload.type === 'TEAMS_SEEDED'
+        ? structuredClone(seedEvent.payload.teams)
+        : this.registry.getAllTeams().map((team) => ({
+            id: team.id,
+            name: team.name,
+            initialSeed: team.initialSeed,
+            ...(team.customMeta !== undefined
+              ? { customMeta: structuredClone(team.customMeta) }
+              : {}),
+          }));
+
+    return {
+      version: '1.0.0',
+      id: meta.id,
+      name: meta.name,
+      description: meta.description ?? '',
+      prngSeed: this.initialPrngSeed,
+      pointsConfig: structuredClone(this.pointsConfig),
+      entryBlockId:
+        seedEvent && seedEvent.payload.type === 'TEAMS_SEEDED'
+          ? seedEvent.payload.blockId
+          : (this.getBlocks()[0]?.id ?? ''),
+      teams: seededTeams,
+      blocks: this.getBlocks().map((block) => ({
+        blockType: block.blockType,
+        config: block.serializeConfig(),
+      })),
+      connectors: structuredClone(this.connectors),
+    };
+  }
+
   static fromJSON(json: SerializedTournamentFull): TournamentGraph {
     const graph = new TournamentGraph({
       prngSeed: json.initialPrngSeed,
@@ -321,6 +433,7 @@ export class TournamentGraph implements TimeMachineHost {
       lastEventId: head?.eventId ?? '',
       prngState: this.prng.getState(),
       pointsConfig: structuredClone(this.pointsConfig),
+      started: this.started,
       teams: this.registry.serialize(),
       blocks: [...this.blocks.values()].map((b) => b.serializeState()),
       connectors: structuredClone(this.connectors),
@@ -334,6 +447,7 @@ export class TournamentGraph implements TimeMachineHost {
     this.registry.restore(snapshot.teams);
     this.prng.setState(snapshot.prngState);
     this.pointsConfig = structuredClone(snapshot.pointsConfig);
+    this.started = snapshot.started ?? false;
     this.manualTieBreakers = new Map(
       snapshot.manualTieBreakers.map(([k, v]) => [k, v.slice()]),
     );
@@ -357,6 +471,7 @@ export class TournamentGraph implements TimeMachineHost {
         this.initialPrngSeed = payload.prngSeed;
         this.prng.setState(payload.prngSeed);
         this.pointsConfig = { ...payload.pointsConfig };
+        this.started = false;
         break;
 
       case 'TEAMS_SEEDED': {
@@ -366,6 +481,12 @@ export class TournamentGraph implements TimeMachineHost {
         block.setInputTeamIds(payload.teams.map((team) => team.id));
         break;
       }
+
+      case 'TEAM_RENAMED':
+        if (this.registry.hasTeam(payload.teamId)) {
+          this.registry.getTeam(payload.teamId).name = payload.name;
+        }
+        break;
 
       case 'TOURNAMENT_STARTED':
         this.startTournament();
@@ -469,9 +590,32 @@ export class TournamentGraph implements TimeMachineHost {
         }
         return { status: 'applied', payload };
 
-      case 'TOURNAMENT_INITIALIZED':
-      case 'TEAMS_SEEDED':
+      case 'TEAM_RENAMED':
+        if (!this.registry.hasTeam(payload.teamId)) {
+          return { status: 'orphaned', reason: 'Team no longer exists' };
+        }
+        return { status: 'applied', payload };
+
+      case 'TEAMS_SEEDED': {
+        if (!this.blocks.has(payload.blockId)) {
+          return { status: 'orphaned', reason: 'Block no longer exists' };
+        }
+        if (payload.teams.every((team) => this.registry.hasTeam(team.id))) {
+          return {
+            status: 'orphaned',
+            reason: 'Teams are already seeded in recalculated timeline',
+          };
+        }
+        return { status: 'applied', payload };
+      }
+
       case 'TOURNAMENT_STARTED':
+        if (this.started) {
+          return { status: 'orphaned', reason: 'Tournament already started in recalculated timeline' };
+        }
+        return { status: 'applied', payload };
+
+      case 'TOURNAMENT_INITIALIZED':
         return { status: 'orphaned', reason: 'Structural event cannot be replayed in tail' };
     }
   }
@@ -483,6 +627,16 @@ export class TournamentGraph implements TimeMachineHost {
     timestamp?: number,
   ): RebaseResult {
     return this.timeMachine.amendEvent(targetEventId, newPayload, timestamp);
+  }
+
+  /** Supprime un événement passé puis rejoue ou orpheline la suite. */
+  deleteEvent(targetEventId: string): DeleteEventResult {
+    return this.timeMachine.deleteEvent(targetEventId);
+  }
+
+  /** Remonte le temps en tronquant la timeline après l'événement ciblé. */
+  rewindTo(targetEventId: string): RewindResult {
+    return this.timeMachine.rewindTo(targetEventId);
   }
 
   // ---------------------------------------------------------------------------
@@ -501,6 +655,7 @@ export class TournamentGraph implements TimeMachineHost {
   }
 
   private startTournament(): void {
+    this.started = true;
     const roots = [...this.blocks.values()].filter(
       (block) => !this.connectors.some((c) => c.targetBlockId === block.id),
     );

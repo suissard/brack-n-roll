@@ -1,14 +1,20 @@
 import {
   TournamentGraph,
+  createGraphFromFormat,
   type BlockState,
   type ConnectorConfig,
   type EnrichedTeam,
   type Match,
   type TournamentEvent,
   type TournamentEventPayload,
+  type TournamentFormat,
 } from '../../../src/index';
 import { tournamentApi } from '../db/tournamentApi';
-import { buildScenario, scenarioMeta, type ScenarioId } from './scenarios';
+import { SCENARIOS, buildScenario, scenarioMeta, type ScenarioId } from './scenarios';
+
+function isScenarioId(id: string): id is ScenarioId {
+  return SCENARIOS.some((scenario) => scenario.id === id);
+}
 
 export interface BlockView {
   id: string;
@@ -23,10 +29,17 @@ export interface BlockView {
   config: Record<string, unknown>;
 }
 
+export type RebaseAction = 'amend' | 'delete' | 'rewind' | 'reseed';
+
 export interface RebaseSummary {
+  action: RebaseAction;
   targetEventId: string;
   applied: number;
   orphaned: number;
+  /** Nombre d'événements réellement retirés de la timeline. */
+  removed: number;
+  /** Motifs d'orphelinage, pour expliquer les répercussions. */
+  reasons: string[];
   newHeadStateHash: string;
 }
 
@@ -34,11 +47,17 @@ export interface TournamentView {
   status: 'loading' | 'ready' | 'error';
   busy: boolean;
   error: string | null;
-  scenarioId: ScenarioId;
+  /** Identifiant du scénario intégré ou du format chargé. */
+  scenarioId: string;
   scenarioName: string;
+  sourceKind: 'scenario' | 'format';
   started: boolean;
   teams: EnrichedTeam[];
   standings: EnrichedTeam[];
+  /** Bloc d'entrée du seeding (dernier `TEAMS_SEEDED`). */
+  seedBlockId: string | null;
+  /** Équipes ordonnées par seed initial (ordre de seeding éditable). */
+  seedOrder: EnrichedTeam[];
   blocks: BlockView[];
   connectors: ConnectorConfig[];
   playableMatches: Match[];
@@ -56,9 +75,12 @@ const EMPTY_VIEW: TournamentView = {
   error: null,
   scenarioId: 'swiss-topcut-8',
   scenarioName: scenarioMeta('swiss-topcut-8').name,
+  sourceKind: 'scenario',
   started: false,
   teams: [],
   standings: [],
+  seedBlockId: null,
+  seedOrder: [],
   blocks: [],
   connectors: [],
   playableMatches: [],
@@ -78,7 +100,9 @@ const EMPTY_VIEW: TournamentView = {
  */
 class TournamentStore {
   private graph: TournamentGraph | null = null;
-  private scenarioId: ScenarioId = 'swiss-topcut-8';
+  private scenarioId: string = 'swiss-topcut-8';
+  private scenarioName: string = scenarioMeta('swiss-topcut-8').name;
+  private sourceKind: TournamentView['sourceKind'] = 'scenario';
   private status: TournamentView['status'] = 'loading';
   private busy = false;
   private error: string | null = null;
@@ -112,6 +136,20 @@ class TournamentStore {
     }
 
     const timeline = graph.timeMachine.getTimeline().slice();
+    const seedEvent = [...timeline]
+      .reverse()
+      .find((event) => event.payload.type === 'TEAMS_SEEDED');
+    const seedBlockId =
+      seedEvent && seedEvent.payload.type === 'TEAMS_SEEDED' ? seedEvent.payload.blockId : null;
+    const seedOrder = graph.registry
+      .getAllTeams()
+      .slice()
+      .sort(
+        (a, b) =>
+          a.initialSeed - b.initialSeed ||
+          a.currentSeed - b.currentSeed ||
+          a.id.localeCompare(b.id),
+      );
     const blocks: BlockView[] = graph.getBlocks().map((block) => ({
       id: block.id,
       type: block.blockType,
@@ -129,10 +167,13 @@ class TournamentStore {
       busy: this.busy,
       error: this.error,
       scenarioId: this.scenarioId,
-      scenarioName: scenarioMeta(this.scenarioId).name,
+      scenarioName: this.scenarioName,
+      sourceKind: this.sourceKind,
       started: timeline.some((event) => event.payload.type === 'TOURNAMENT_STARTED'),
       teams: graph.registry.getAllTeams(),
       standings: graph.getStandings(),
+      seedBlockId,
+      seedOrder,
       blocks,
       connectors: graph.getConnectors(),
       playableMatches: graph.getPlayableMatches(),
@@ -154,7 +195,7 @@ class TournamentStore {
 
   private async persist(): Promise<void> {
     if (!this.graph) return;
-    await tournamentApi.save(this.scenarioId, this.graph.toJSON());
+    await tournamentApi.save(this.scenarioId, this.graph.toJSON(), this.scenarioName);
     this.syncDbMeta();
   }
 
@@ -167,10 +208,20 @@ class TournamentStore {
     try {
       const stored = await tournamentApi.load();
       if (stored) {
-        this.scenarioId = stored.scenarioId as ScenarioId;
+        this.scenarioId = stored.scenarioId;
+        this.sourceKind = isScenarioId(stored.scenarioId) ? 'scenario' : 'format';
+        this.scenarioName =
+          stored.name ??
+          (isScenarioId(stored.scenarioId)
+            ? scenarioMeta(stored.scenarioId).name
+            : stored.scenarioId);
         this.graph = TournamentGraph.fromJSON(stored.state);
       } else {
-        this.graph = buildScenario(this.scenarioId);
+        const defaultId: ScenarioId = 'swiss-topcut-8';
+        this.scenarioId = defaultId;
+        this.sourceKind = 'scenario';
+        this.scenarioName = scenarioMeta(defaultId).name;
+        this.graph = buildScenario(defaultId);
         await this.persist();
       }
       this.syncDbMeta();
@@ -190,11 +241,39 @@ class TournamentStore {
     this.emit();
     try {
       this.scenarioId = id;
+      this.scenarioName = scenarioMeta(id).name;
+      this.sourceKind = 'scenario';
       this.graph = buildScenario(id);
       await this.persist();
       this.status = 'ready';
     } catch (error) {
       this.error = error instanceof Error ? error.message : String(error);
+    } finally {
+      this.busy = false;
+      this.emit();
+    }
+  }
+
+  /**
+   * Instancie un format édité : construit le DAG, seed les équipes, démarre le
+   * tournoi et le persiste dans le backend courant.
+   */
+  async loadFormat(format: TournamentFormat): Promise<void> {
+    this.busy = true;
+    this.error = null;
+    this.lastRebase = null;
+    this.emit();
+    try {
+      const graph = createGraphFromFormat(format, { autoStart: true });
+      this.scenarioId = format.id;
+      this.scenarioName = format.name;
+      this.sourceKind = 'format';
+      this.graph = graph;
+      await this.persist();
+      this.status = 'ready';
+    } catch (error) {
+      this.error = error instanceof Error ? error.message : String(error);
+      this.status = 'error';
     } finally {
       this.busy = false;
       this.emit();
@@ -209,7 +288,13 @@ class TournamentStore {
     try {
       const stored = await tournamentApi.load();
       if (stored) {
-        this.scenarioId = stored.scenarioId as ScenarioId;
+        this.scenarioId = stored.scenarioId;
+        this.sourceKind = isScenarioId(stored.scenarioId) ? 'scenario' : 'format';
+        this.scenarioName =
+          stored.name ??
+          (isScenarioId(stored.scenarioId)
+            ? scenarioMeta(stored.scenarioId).name
+            : stored.scenarioId);
         this.graph = TournamentGraph.fromJSON(stored.state);
         this.syncDbMeta();
       }
@@ -228,7 +313,13 @@ class TournamentStore {
     this.emit();
     try {
       await tournamentApi.clear();
-      this.graph = buildScenario(this.scenarioId);
+      const scenarioId: ScenarioId = isScenarioId(this.scenarioId)
+        ? this.scenarioId
+        : 'swiss-topcut-8';
+      this.scenarioId = scenarioId;
+      this.scenarioName = scenarioMeta(scenarioId).name;
+      this.sourceKind = 'scenario';
+      this.graph = buildScenario(scenarioId);
       await this.persist();
     } catch (error) {
       this.error = error instanceof Error ? error.message : String(error);
@@ -273,6 +364,9 @@ class TournamentStore {
   dropTeam = (teamId: string, reason?: string): Promise<void> =>
     this.mutate((graph) => graph.dropTeam(teamId, reason));
 
+  renameTeam = (teamId: string, name: string): Promise<void> =>
+    this.mutate((graph) => graph.renameTeam(teamId, name));
+
   /** Réécrit un événement passé et rejoue la queue (Causal Replay). */
   amendEvent = async (eventId: string, payload: TournamentEventPayload): Promise<void> => {
     if (!this.graph) return;
@@ -282,9 +376,90 @@ class TournamentStore {
     try {
       const result = this.graph.amendEvent(eventId, payload);
       this.lastRebase = {
+        action: 'amend',
         targetEventId: eventId,
         applied: result.appliedEvents.length,
         orphaned: result.orphanedEvents.length,
+        removed: 0,
+        reasons: result.orphanedEvents.map((info) => info.reason),
+        newHeadStateHash: result.newHeadStateHash,
+      };
+      await this.persist();
+    } catch (error) {
+      this.error = error instanceof Error ? error.message : String(error);
+    } finally {
+      this.busy = false;
+      this.emit();
+    }
+  };
+
+  /** Supprime un événement passé et montre les répercussions sur la suite. */
+  deleteEvent = async (eventId: string): Promise<void> => {
+    if (!this.graph) return;
+    this.busy = true;
+    this.error = null;
+    this.emit();
+    try {
+      const result = this.graph.deleteEvent(eventId);
+      this.lastRebase = {
+        action: 'delete',
+        targetEventId: eventId,
+        applied: result.appliedEvents.length,
+        orphaned: result.orphanedEvents.length,
+        removed: 1 + result.orphanedEvents.length,
+        reasons: result.orphanedEvents.map((info) => info.reason),
+        newHeadStateHash: result.newHeadStateHash,
+      };
+      await this.persist();
+    } catch (error) {
+      this.error = error instanceof Error ? error.message : String(error);
+    } finally {
+      this.busy = false;
+      this.emit();
+    }
+  };
+
+  /** Remonte le temps jusqu'à un événement (les suivants sont supprimés). */
+  rewindTo = async (eventId: string): Promise<void> => {
+    if (!this.graph) return;
+    this.busy = true;
+    this.error = null;
+    this.emit();
+    try {
+      const result = this.graph.rewindTo(eventId);
+      this.lastRebase = {
+        action: 'rewind',
+        targetEventId: eventId,
+        applied: 0,
+        orphaned: 0,
+        removed: result.removedEvents.length,
+        reasons: [],
+        newHeadStateHash: result.newHeadStateHash,
+      };
+      await this.persist();
+    } catch (error) {
+      this.error = error instanceof Error ? error.message : String(error);
+    } finally {
+      this.busy = false;
+      this.emit();
+    }
+  };
+
+  /** Réécrit l'ordre de seeding dans la Time Machine et rejoue le tournoi. */
+  reseed = async (blockId: string, orderedTeamIds: string[]): Promise<void> => {
+    if (!this.graph) return;
+    this.busy = true;
+    this.error = null;
+    this.emit();
+    try {
+      const result = this.graph.reseedTeams(blockId, orderedTeamIds);
+      this.lastRebase = {
+        action: 'reseed',
+        targetEventId: result.targetEventId,
+        applied: result.appliedEvents.length,
+        orphaned: result.orphanedEvents.length,
+        removed: 0,
+        reasons: result.orphanedEvents.map((info) => info.reason),
         newHeadStateHash: result.newHeadStateHash,
       };
       await this.persist();

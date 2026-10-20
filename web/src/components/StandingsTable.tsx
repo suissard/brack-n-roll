@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import type { EnrichedTeam, TeamStatus } from '../../../src/index';
 
 const STATUS_LABEL: Record<TeamStatus, string> = {
@@ -11,9 +12,24 @@ interface Props {
   standings: EnrichedTeam[];
   busy: boolean;
   onDrop: (teamId: string) => void;
+  onRename: (teamId: string, name: string) => void;
 }
 
-export function StandingsTable({ standings, busy, onDrop }: Props) {
+export function StandingsTable({ standings, busy, onDrop, onRename }: Props) {
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [draft, setDraft] = useState('');
+
+  const startEditing = (team: EnrichedTeam) => {
+    setEditingId(team.id);
+    setDraft(team.name);
+  };
+
+  const commitEditing = (team: EnrichedTeam) => {
+    const name = draft.trim();
+    setEditingId(null);
+    if (name.length > 0 && name !== team.name) onRename(team.id, name);
+  };
+
   return (
     <table className="standings">
       <thead>
@@ -39,8 +55,48 @@ export function StandingsTable({ standings, busy, onDrop }: Props) {
           <tr key={team.id} className={`status-${team.status.toLowerCase()}`}>
             <td className="muted">{index + 1}</td>
             <td>
-              <span className="team-name">{team.name}</span>
-              <span className="team-id">{team.id}</span>
+              {editingId === team.id ? (
+                <div className="inline-edit">
+                  <input
+                    autoFocus
+                    value={draft}
+                    maxLength={60}
+                    onChange={(event) => setDraft(event.target.value)}
+                    onKeyDown={(event) => {
+                      if (event.key === 'Enter') commitEditing(team);
+                      if (event.key === 'Escape') setEditingId(null);
+                    }}
+                    aria-label={`Nom de ${team.name}`}
+                  />
+                  <button
+                    type="button"
+                    className="mini primary"
+                    disabled={busy}
+                    onClick={() => commitEditing(team)}
+                  >
+                    OK
+                  </button>
+                  <button type="button" className="mini ghost" onClick={() => setEditingId(null)}>
+                    ✕
+                  </button>
+                </div>
+              ) : (
+                <>
+                  <span className="team-name-row">
+                    <span className="team-name">{team.name}</span>
+                    <button
+                      type="button"
+                      className="icon-btn"
+                      disabled={busy}
+                      title="Renommer l'équipe"
+                      onClick={() => startEditing(team)}
+                    >
+                      ✎
+                    </button>
+                  </span>
+                  <span className="team-id">{team.id}</span>
+                </>
+              )}
             </td>
             <td>
               <span className={`badge badge-${team.status.toLowerCase()}`}>{STATUS_LABEL[team.status]}</span>

@@ -14,6 +14,7 @@ import type {
 export type TournamentEventPayload =
   | { type: 'TOURNAMENT_INITIALIZED'; prngSeed: number; pointsConfig: PointsConfig }
   | { type: 'TEAMS_SEEDED'; blockId: string; teams: TeamBase[] }
+  | { type: 'TEAM_RENAMED'; teamId: string; name: string }
   | { type: 'TOURNAMENT_STARTED' }
   | {
       type: 'MATCH_RESULT_REPORTED';
@@ -52,6 +53,17 @@ export interface RebaseResult {
   newHeadStateHash: string;
 }
 
+/** Résultat de la suppression d'un événement de la timeline. */
+export interface DeleteEventResult extends RebaseResult {
+  removedEvent: TournamentEvent;
+}
+
+/** Résultat d'un retour en arrière (troncature de la timeline). */
+export interface RewindResult {
+  removedEvents: TournamentEvent[];
+  newHeadStateHash: string;
+}
+
 export interface SerializedBlockState {
   id: string;
   blockType: 'BRACKET' | 'SWISS' | 'ROUND_ROBIN' | 'MERGER';
@@ -70,6 +82,8 @@ export interface SerializedTournamentSnapshot {
   lastEventId: string;
   prngState: number;
   pointsConfig: PointsConfig;
+  /** Permet de rejouer un `TOURNAMENT_STARTED` sans redémarrer deux fois. */
+  started?: boolean;
   teams: Array<[string, EnrichedTeam]>;
   blocks: SerializedBlockState[];
   connectors: ConnectorConfig[];

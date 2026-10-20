@@ -185,6 +185,7 @@ import { TeamBase, BlockConfigBase, ConnectorConfig, EnrichedTeam, Match, BlockS
 export type TournamentEventPayload =
   | { type: 'TOURNAMENT_INITIALIZED'; prngSeed: number; pointsConfig: PointsConfig }
   | { type: 'TEAMS_SEEDED'; blockId: string; teams: TeamBase[] }
+  | { type: 'TEAM_RENAMED'; teamId: string; name: string }
   | { type: ' TOURNAMENT_STARTED' }
   | {
       type: 'MATCH_RESULT_REPORTED';
@@ -508,7 +509,14 @@ export class TournamentGraph {
   public dropTeam(teamId: string, reason?: string): TournamentEvent;
   public lockRoundPairings(blockId: string): TournamentEvent;
   public overrideSeeds(blockId: string, orderedTeamIds: string[]): TournamentEvent;
+  public renameTeam(teamId: string, name: string): TournamentEvent;
+  public reseedTeams(blockId: string, orderedTeamIds: string[]): ReseedResult;
   public resolveTieBreaker(connectorId: string, orderedTeamIds: string[]): TournamentEvent;
+
+  // Édition de la Time Machine (suppression de ligne & retour en arrière)
+  public amendEvent(targetEventId: string, newPayload: TournamentEventPayload): RebaseResult;
+  public deleteEvent(targetEventId: string): DeleteEventResult;
+  public rewindTo(targetEventId: string): RewindResult;
 
   // Requêtes et Lecture d'État (Sans effet de bord)
   public getPlayableMatches(blockId?: string): Match[];
@@ -519,6 +527,7 @@ export class TournamentGraph {
 
   // Sérialisation & Clonage temporel
   public toJSON(): SerializedTournamentFull;
+  public toFormat(meta: TournamentFormatMeta): TournamentFormat;
   public static fromJSON(json: SerializedTournamentFull): TournamentGraph;
 }
 ```
@@ -539,6 +548,50 @@ Lorsqu'un événement `MATCH_RESULT_REPORTED` ou `TEAM_DROPPED` est appliqué da
      3. Applique `connector.transformSeeding(qualifiedTeams, this.prng)`.
      4. Pousse les équipes dans le bloc cible via `targetBlock.receiveBatchTeams(...)`.
    * Les équipes non retenues par aucun connecteur sortant voient leur statut passer à `'ELIMINATED'` dans le `TournamentRegistry` (et le vainqueur d'un bloc terminal sans connecteur sortant passe à `'CHAMPION'`).
+
+---
+
+### 6.5. Formats déclaratifs (`src/types/format.types.ts` & `src/engine/format-builder.ts`)
+
+Un **format** décrit la topologie d'un tournoi *avant* toute timeline. C'est un
+document 100 % JSON, stockable en base et éditable dans l'interface.
+
+```typescript
+export interface TournamentFormat {
+  version: '1.0.0';
+  id: string;
+  name: string;
+  description?: string;
+  prngSeed: number;
+  pointsConfig: PointsConfig;
+  entryBlockId: string;              // bloc recevant TEAMS_SEEDED
+  teams: TeamBase[];                 // ordre = seed initial
+  blocks: Array<{ blockType: FormatBlockType; config: Record<string, unknown> }>;
+  connectors: ConnectorConfig[];
+}
+
+export function validateTournamentFormat(format: TournamentFormat): FormatValidationIssue[];
+export function createGraphFromFormat(
+  format: TournamentFormat,
+  options?: { autoStart?: boolean },
+): TournamentGraph;
+export function emptyTournamentFormat(meta: TournamentFormatMeta): TournamentFormat;
+```
+
+Règles de validation : identifiant/nom requis, graine numérique, au moins un
+bloc et deux équipes, identifiants de blocs et de connecteurs uniques, bloc
+d'entrée existant, connecteurs référençant des blocs existants et sans
+auto-boucle.
+
+`TournamentGraph.toFormat(meta)` réalise l'export inverse : il reprend les
+définitions de blocs, les connecteurs, la graine PRNG, le barème et l'événement
+`TEAMS_SEEDED` initial, mais ignore les résultats joués.
+
+Côté front, l'éditeur (vue « Formats ») s'appuie sur un second faux backend
+`formatApi` / `FakeDatabase` avec sa propre clé `localStorage`
+(`brack-n-roll::formats-fake-db::v1`). Le bouton « Ouvrir dans la console »
+appelle `createGraphFromFormat(format, { autoStart: true })` puis persiste le
+tournoi obtenu dans le backend courant.
 
 ---
 

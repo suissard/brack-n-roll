@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { MatchesPanel } from './MatchesPanel';
+import { SeedingPanel } from './SeedingPanel';
 import { StandingsTable } from './StandingsTable';
 import { TimelinePanel } from './TimelinePanel';
 import { SCENARIOS, type ScenarioId } from '../store/scenarios';
@@ -10,11 +11,13 @@ interface Props {
 }
 
 export function ConsoleView({ view }: Props) {
-  const [scenarioChoice, setScenarioChoice] = useState<ScenarioId>(view.scenarioId);
+  const [scenarioChoice, setScenarioChoice] = useState<string>(view.scenarioId);
 
   useEffect(() => {
     setScenarioChoice(view.scenarioId);
   }, [view.scenarioId]);
+
+  const isKnownScenario = SCENARIOS.some((scenario) => scenario.id === scenarioChoice);
 
   const teamsById = useMemo(
     () => Object.fromEntries(view.teams.map((team) => [team.id, team])),
@@ -26,6 +29,14 @@ export function ConsoleView({ view }: Props) {
     [view.blocks],
   );
 
+  const rewindOneStep = () => {
+    const head = view.timeline[view.timeline.length - 1];
+    const previous = view.timeline[view.timeline.length - 2];
+    if (!head || !previous) return;
+    if (!window.confirm(`${head.payload.type} sera retiré de la timeline. Continuer ?`)) return;
+    void tournamentStore.rewindTo(previous.eventId);
+  };
+
   return (
     <div className="console-view">
       <section className="toolbar">
@@ -33,9 +44,12 @@ export function ConsoleView({ view }: Props) {
           <span>Scénario de démonstration</span>
           <select
             value={scenarioChoice}
-            onChange={(event) => setScenarioChoice(event.target.value as ScenarioId)}
+            onChange={(event) => setScenarioChoice(event.target.value)}
             disabled={view.busy}
           >
+            {!isKnownScenario && (
+              <option value={scenarioChoice}>{view.scenarioName}</option>
+            )}
             {SCENARIOS.map((scenario) => (
               <option key={scenario.id} value={scenario.id}>
                 {scenario.name}
@@ -47,8 +61,8 @@ export function ConsoleView({ view }: Props) {
         <button
           type="button"
           className="primary"
-          disabled={view.busy}
-          onClick={() => void tournamentStore.loadScenario(scenarioChoice)}
+          disabled={view.busy || !isKnownScenario}
+          onClick={() => void tournamentStore.loadScenario(scenarioChoice as ScenarioId)}
         >
           Charger le scénario
         </button>
@@ -59,6 +73,16 @@ export function ConsoleView({ view }: Props) {
           onClick={() => void tournamentStore.start()}
         >
           Démarrer le tournoi
+        </button>
+
+        <button
+          type="button"
+          className="ghost"
+          disabled={view.busy || view.timeline.length < 2}
+          onClick={rewindOneStep}
+          title="Supprimer le dernier événement de la timeline"
+        >
+          ◀ Revenir d'un événement
         </button>
 
         <button
@@ -92,6 +116,7 @@ export function ConsoleView({ view }: Props) {
             standings={view.standings}
             busy={view.busy}
             onDrop={(teamId) => void tournamentStore.dropTeam(teamId, 'abandon via console')}
+            onRename={(teamId, name) => void tournamentStore.renameTeam(teamId, name)}
           />
         </section>
 
@@ -105,6 +130,14 @@ export function ConsoleView({ view }: Props) {
           }
         />
       </div>
+
+      <SeedingPanel
+        teams={view.seedOrder}
+        seedBlockId={view.seedBlockId}
+        started={view.started}
+        busy={view.busy}
+        onReseed={(blockId, orderedTeamIds) => void tournamentStore.reseed(blockId, orderedTeamIds)}
+      />
 
       <section className="panel">
         <header className="panel-header">
@@ -135,6 +168,8 @@ export function ConsoleView({ view }: Props) {
         teams={teamsById}
         busy={view.busy}
         onAmend={(eventId, payload) => void tournamentStore.amendEvent(eventId, payload)}
+        onDelete={(eventId) => void tournamentStore.deleteEvent(eventId)}
+        onRewind={(eventId) => void tournamentStore.rewindTo(eventId)}
       />
     </div>
   );

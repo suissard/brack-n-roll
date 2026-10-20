@@ -12,6 +12,8 @@ const CURRENT_ID = 'current';
 
 export interface StoredTournament {
   scenarioId: string;
+  /** Nom lisible (scénario de démo ou format personnalisé). */
+  name?: string;
   savedAt: string;
   state: SerializedTournamentFull;
 }
@@ -21,9 +23,14 @@ export const tournamentApi = {
     return db.find<StoredTournament>(COLLECTION, CURRENT_ID);
   },
 
-  async save(scenarioId: string, state: SerializedTournamentFull): Promise<StoredTournament> {
+  async save(
+    scenarioId: string,
+    state: SerializedTournamentFull,
+    name?: string,
+  ): Promise<StoredTournament> {
     const record: StoredTournament = {
       scenarioId,
+      ...(name !== undefined ? { name } : {}),
       savedAt: new Date().toISOString(),
       state,
     };

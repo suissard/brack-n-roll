@@ -1,5 +1,5 @@
 {
-  "name": "algo-tournament",
+  "name": "brack-n-roll",
   "version": "3.0.0",
   "description": "Moteur algorithmique de tournoi modulaire (DAG) & Time Machine (Event Sourcing)",
   "license": "MIT",
