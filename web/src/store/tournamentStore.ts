@@ -1,6 +1,7 @@
 import {
   TournamentGraph,
   type BlockState,
+  type ConnectorConfig,
   type EnrichedTeam,
   type Match,
   type TournamentEvent,
@@ -13,10 +14,13 @@ export interface BlockView {
   id: string;
   type: string;
   state: BlockState;
+  stageId: string;
   roundNumber: number;
   inputTeamIds: string[];
   outputTeamIds: string[];
   matches: Match[];
+  /** Configuration sérialisée du bloc (ex: `roundIndex` d'une journée). */
+  config: Record<string, unknown>;
 }
 
 export interface RebaseSummary {
@@ -36,6 +40,7 @@ export interface TournamentView {
   teams: EnrichedTeam[];
   standings: EnrichedTeam[];
   blocks: BlockView[];
+  connectors: ConnectorConfig[];
   playableMatches: Match[];
   timeline: TournamentEvent[];
   stateHash: string;
@@ -55,6 +60,7 @@ const EMPTY_VIEW: TournamentView = {
   teams: [],
   standings: [],
   blocks: [],
+  connectors: [],
   playableMatches: [],
   timeline: [],
   stateHash: '',
@@ -110,10 +116,12 @@ class TournamentStore {
       id: block.id,
       type: block.blockType,
       state: block.getState(),
+      stageId: block.config.stageId ?? block.id,
       roundNumber: block.getRoundNumber(),
       inputTeamIds: block.getInputTeamIds(),
       outputTeamIds: block.getOutputTeamIds(),
       matches: block.getMatches(),
+      config: block.serializeConfig(),
     }));
 
     return {
@@ -126,6 +134,7 @@ class TournamentStore {
       teams: graph.registry.getAllTeams(),
       standings: graph.getStandings(),
       blocks,
+      connectors: graph.getConnectors(),
       playableMatches: graph.getPlayableMatches(),
       timeline,
       stateHash: graph.getStateHash(),

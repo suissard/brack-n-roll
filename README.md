@@ -85,7 +85,27 @@ de test, **sans backend** : un faux client de base de données persiste dans le
 npm run web:dev     # → http://localhost:5174
 ```
 
-Fonctionnalités de l'interface :
+Deux vues sont disponibles depuis l'en-tête :
+
+### Vue « Tournoi » (par défaut, orientée spectateurs)
+
+- **Bandeau de tournoi** : format détecté automatiquement, statut, équipes
+  encore en course, matchs joués, progression et champion.
+- **Fil des matchs** : matchs prêts à jouer, prochains matchs et derniers
+  résultats.
+- **Visuel adaptatif au format** :
+  - **Système suisse** : colonnes par ronde, statut de chaque ronde, scores et
+    vainqueurs.
+  - **Toutes rondes** : colonnes par journée.
+  - **Élimination directe** : bracket avec connexions entre les tours, y
+    compris les matchs projetés (« qualifié à désigner »).
+  - **Double élimination** : tableau des gagnants, tableau des perdants,
+    grande finale et bracket reset.
+  - **Phases mixtes** : enchaînement suisse/toutes rondes → phase finale.
+- **Classement général** : bilan cumulé sur toutes les phases, équipes
+  qualifiées et statuts (en course, éliminé, champion).
+
+### Vue « Console » (pilotage et debug)
 
 - **Classement** live (points, Buchholz, différence, série, statut) avec bouton
   d'**abandon** d'une équipe.

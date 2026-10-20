@@ -1,10 +1,10 @@
-import { useEffect, useMemo, useState } from 'react';
-import { StandingsTable } from './components/StandingsTable';
-import { MatchesPanel } from './components/MatchesPanel';
-import { TimelinePanel } from './components/TimelinePanel';
+import { useEffect, useState } from 'react';
+import { ConsoleView } from './components/ConsoleView';
+import { TournamentView } from './spectator/TournamentView';
 import { useTournament } from './hooks/useTournament';
-import { SCENARIOS, type ScenarioId } from './store/scenarios';
 import { tournamentStore } from './store/tournamentStore';
+
+type ViewId = 'tournament' | 'console';
 
 function formatBytes(bytes: number): string {
   if (bytes < 1024) return `${bytes} o`;
@@ -20,169 +20,84 @@ function formatDate(value: string | null): string {
 
 export function App() {
   const view = useTournament();
-  const [scenarioChoice, setScenarioChoice] = useState<ScenarioId>(view.scenarioId);
+  const [activeView, setActiveView] = useState<ViewId>('tournament');
 
   useEffect(() => {
     void tournamentStore.init();
   }, []);
 
-  useEffect(() => {
-    setScenarioChoice(view.scenarioId);
-  }, [view.scenarioId]);
-
-  const teamsById = useMemo(
-    () => Object.fromEntries(view.teams.map((team) => [team.id, team])),
-    [view.teams],
-  );
-
-  const allMatches = useMemo(
-    () => view.blocks.flatMap((block) => block.matches),
-    [view.blocks],
-  );
-
-  const champion = view.standings.find((team) => team.status === 'CHAMPION');
-
   return (
     <div className="app">
       <header className="app-header">
-        <div>
-          <h1>Algo Tournament</h1>
-          <p className="subtitle">
-            Console de visualisation — moteur DAG + Time Machine (données de démo, persistance
-            locale via un faux backend)
-          </p>
-        </div>
-        <div className="header-stats">
-          <span className="chip">Révision DB #{view.revision}</span>
-          <span className="chip">Maj {formatDate(view.updatedAt)}</span>
-          <span className="chip" title="Taille du localStorage">
-            {formatBytes(view.storageBytes)}
+        <div className="brand">
+          <span className="brand-mark" aria-hidden="true">
+            AT
           </span>
-          <span className="chip hash" title="Hash FNV-1a de l'état">
-            état {view.stateHash.slice(0, 8) || '—'}
-          </span>
+          <div className="brand-copy">
+            <h1>Algo Tournament</h1>
+            <p className="subtitle">
+              {activeView === 'tournament'
+                ? 'Matchs, tableaux et classement en direct'
+                : 'Console technique · moteur DAG & Time Machine'}
+            </p>
+          </div>
         </div>
-      </header>
 
-      <section className="toolbar">
-        <label className="field">
-          <span>Scénario</span>
-          <select
-            value={scenarioChoice}
-            onChange={(event) => setScenarioChoice(event.target.value as ScenarioId)}
-            disabled={view.busy}
+        <nav className="view-tabs" aria-label="Navigation principale">
+          <button
+            type="button"
+            className={`view-tab${activeView === 'tournament' ? ' is-active' : ''}`}
+            onClick={() => setActiveView('tournament')}
           >
-            {SCENARIOS.map((scenario) => (
-              <option key={scenario.id} value={scenario.id}>
-                {scenario.name}
-              </option>
-            ))}
-          </select>
-        </label>
+            <span className="view-tab-dot" />
+            Tournoi
+          </button>
+          <button
+            type="button"
+            className={`view-tab${activeView === 'console' ? ' is-active' : ''}`}
+            onClick={() => setActiveView('console')}
+          >
+            <span className="view-tab-dot ghost-dot" />
+            Console
+          </button>
+        </nav>
 
-        <button
-          type="button"
-          className="primary"
-          disabled={view.busy}
-          onClick={() => void tournamentStore.loadScenario(scenarioChoice)}
-        >
-          Charger le scénario
-        </button>
-
-        <button
-          type="button"
-          disabled={view.busy || view.started}
-          onClick={() => void tournamentStore.start()}
-        >
-          Démarrer le tournoi
-        </button>
-
-        <button type="button" className="ghost" disabled={view.busy} onClick={() => void tournamentStore.refresh()}>
-          Recharger (DB)
-        </button>
-
-        <button
-          type="button"
-          className="ghost danger"
-          disabled={view.busy}
-          onClick={() => void tournamentStore.clearStorage()}
-        >
-          Vider le stockage
-        </button>
-
-        {view.busy && <span className="spinner" aria-label="Chargement" />}
-      </section>
+        {activeView === 'console' ? (
+          <div className="header-stats">
+            <span className="chip">Révision DB #{view.revision}</span>
+            <span className="chip">Maj {formatDate(view.updatedAt)}</span>
+            <span className="chip" title="Taille du localStorage">
+              {formatBytes(view.storageBytes)}
+            </span>
+            <span className="chip hash" title="Hash FNV-1a de l'état">
+              état {view.stateHash.slice(0, 8) || '—'}
+            </span>
+          </div>
+        ) : (
+          <div className="header-stats">
+            <span className="chip chip-demo">Démo locale · sans backend</span>
+            <span className="chip">Maj {formatDate(view.updatedAt)}</span>
+          </div>
+        )}
+      </header>
 
       {view.status === 'error' && view.error && <div className="banner error">{view.error}</div>}
       {view.error && view.status !== 'error' && <div className="banner error">{view.error}</div>}
-      {view.lastRebase && (
+      {activeView === 'console' && view.lastRebase && (
         <div className="banner info">
           Causal Replay sur <code>{view.lastRebase.targetEventId}</code> :{' '}
           <strong>{view.lastRebase.applied}</strong> événement(s) rejoué(s),{' '}
-          <strong>{view.lastRebase.orphaned}</strong> orphelin(s). Nouveau head {view.lastRebase.newHeadStateHash.slice(0, 8)}.
+          <strong>{view.lastRebase.orphaned}</strong> orphelin(s). Nouveau head{' '}
+          {view.lastRebase.newHeadStateHash.slice(0, 8)}.
         </div>
       )}
-      {champion && <div className="banner champion">🏆 Champion : {champion.name}</div>}
 
       {view.status === 'loading' ? (
         <p className="loading">Chargement du tournoi depuis le backend…</p>
+      ) : activeView === 'tournament' ? (
+        <TournamentView view={view} onStart={() => void tournamentStore.start()} />
       ) : (
-        <>
-          <div className="grid">
-            <section className="panel">
-              <header className="panel-header">
-                <h2>Classement — {view.scenarioName}</h2>
-                <span className="muted">{view.teams.length} équipes</span>
-              </header>
-              <StandingsTable
-                standings={view.standings}
-                busy={view.busy}
-                onDrop={(teamId) => void tournamentStore.dropTeam(teamId, 'abandon via console')}
-              />
-            </section>
-
-            <MatchesPanel
-              playable={view.playableMatches}
-              allMatches={allMatches}
-              teams={teamsById}
-              busy={view.busy}
-              onReport={(matchId, scoreA, scoreB, override) =>
-                void tournamentStore.reportResult(matchId, scoreA, scoreB, override)
-              }
-            />
-          </div>
-
-          <section className="panel">
-            <header className="panel-header">
-              <h2>Blocs du DAG</h2>
-              <span className="muted">{view.blocks.length} blocs</span>
-            </header>
-            <div className="blocks">
-              {view.blocks.map((block) => (
-                <div key={block.id} className={`block-card state-${block.state.toLowerCase()}`}>
-                  <div className="block-head">
-                    <span className="block-id">{block.id}</span>
-                    <span className="chip">{block.type}</span>
-                  </div>
-                  <div className="block-body">
-                    <span className={`badge badge-state`}>{block.state}</span>
-                    <span className="muted">
-                      {block.matches.length} match(s) · in {block.inputTeamIds.length} / out{' '}
-                      {block.outputTeamIds.length}
-                    </span>
-                  </div>
-                </div>
-              ))}
-            </div>
-          </section>
-
-          <TimelinePanel
-            timeline={view.timeline}
-            teams={teamsById}
-            busy={view.busy}
-            onAmend={(eventId, payload) => void tournamentStore.amendEvent(eventId, payload)}
-          />
-        </>
+        <ConsoleView view={view} />
       )}
     </div>
   );

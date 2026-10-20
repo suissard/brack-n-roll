@@ -23,27 +23,27 @@ export interface ScenarioMeta {
 export const SCENARIOS: ScenarioMeta[] = [
   {
     id: 'swiss-topcut-8',
-    name: 'Suisse (2 rondes jouées) → Top Cut 4',
+    name: 'Suisse 8 équipes → Top Cut 4',
     description:
       '8 équipes, 3 rondes suisses puis demi-finales et finale. Deux rondes sont pré-jouées.',
     teamCount: 8,
   },
   {
     id: 'swiss-fresh-8',
-    name: 'Suisse 8 équipes (à démarrer)',
+    name: 'Suisse 8 équipes (prêt à démarrer)',
     description: '8 équipes seedées, tournoi non démarré : idéal pour tester le lancement.',
     teamCount: 8,
   },
   {
     id: 'double-elim-4',
-    name: 'Double élimination (4) en streaming',
+    name: 'Double élimination 4 équipes',
     description:
       'Winner/Loser brackets en propagation STREAMING + Grande Finale et Bracket Reset.',
     teamCount: 4,
   },
   {
     id: 'round-robin-4',
-    name: 'Toutes rondes (4) — 1 journée jouée',
+    name: 'Toutes rondes 4 équipes',
     description: 'Polygone de Berger sur 3 journées.',
     teamCount: 4,
   },
