@@ -1,0 +1,46 @@
+name: Vérification de la console web
+
+# La publication GitHub Pages se fait depuis la branche (dossier `/ (root)`),
+# qui sert directement l'`index.html` single file versionné. Ce workflow ne
+# déploie donc rien : il vérifie que le front compile et que l'`index.html`
+# versionné est bien à jour par rapport aux sources.
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build et vérification
+    runs-on: ubuntu-latest
+    steps:
+      - name: Récupérer le dépôt
+        uses: actions/checkout@v4
+
+      - name: Installer Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Installer les dépendances
+        run: npm ci
+
+      - name: Vérifier les types du front
+        run: npm run typecheck:web
+
+      - name: Construire la console (web/dist + index.html racine)
+        run: npm run web:build
+
+      - name: Vérifier que l'index.html racine est à jour
+        run: |
+          if ! git diff --quiet -- index.html; then
+            echo "::error::index.html n'est pas à jour. Exécutez 'npm run web:build' et commitez le fichier."
+            git diff --stat -- index.html
+            exit 1
+          fi

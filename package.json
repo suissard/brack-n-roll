@@ -16,7 +16,9 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "web:dev": "vite --config web/vite.config.ts",
-    "web:build": "vite build --config web/vite.config.ts",
+    "web:build": "npm run web:build:multi && npm run web:build:single",
+    "web:build:multi": "vite build --config web/vite.config.ts",
+    "web:build:single": "vite build --config web/vite.config.singlefile.ts",
     "web:preview": "vite preview --config web/vite.config.ts"
   },
   "devDependencies": {
@@ -28,6 +30,7 @@
     "react-dom": "^19.3.1",
     "typescript": "^5.7.2",
     "vite": "^5.4.21",
+    "vite-plugin-singlefile": "^2.3.4",
     "vitest": "^2.1.8"
   }
 }

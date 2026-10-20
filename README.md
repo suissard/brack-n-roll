@@ -104,17 +104,9 @@ Fonctionnalités de l'interface :
 web/
 ├── index.html
 ├── vite.config.ts
+├── vite.config.singlefile.ts   # build autonome → index.html à la racine
 ├── tsconfig.json
 └── src/
-    ├── main.tsx / App.tsx / styles.css
-    ├── db/
-    │   ├── fakeDatabase.ts    # faux client DB (collections, latence, révision) → localStorage
-    │   └── tournamentApi.ts   # repository : SEUL point de contact avec le "backend"
-    ├── store/
-    │   ├── scenarios.ts       # jeux de données de démo (import des fixtures de test)
-    │   └── tournamentStore.ts # store observable (useSyncExternalStore) + persistance
-    ├── hooks/useTournament.ts
-    └── components/            # StandingsTable, MatchesPanel, TimelinePanel
 ```
 
 Le moteur est importé directement (`../../../src/index`), sans duplication.
@@ -122,25 +114,53 @@ Pour brancher une vraie base de données plus tard, il suffit de réimplémenter
 `FakeDatabase` / `tournamentApi` avec la même interface asynchrone
 (`load`, `save`, `clear`, `stats`).
 
-### Déploiement automatique sur GitHub Pages
+### Build de la console
 
-Le workflow [`.github/workflows/deploy-web.yml`](./.github/workflows/deploy-web.yml)
-construit la console et la publie sur GitHub Pages à chaque push sur la branche
-par défaut (`main` ou `master`), ou manuellement via
-**Actions → Déploiement de la console web → Run workflow**.
+`npm run web:build` produit **deux sorties** :
+
+| Sortie | Contenu | Usage |
+| --- | --- | --- |
+| `web/dist/` | build classique (JS + CSS séparés) | prévisualisation, serveur web |
+| `./index.html` | build **single file** (JS + CSS inlinés) | GitHub Pages « Deploy from a branch », dossier `/ (root)` |
+
+Les commandes détaillées sont aussi disponibles séparément :
+
+```bash
+npm run web:build:multi    # → web/dist/
+npm run web:build:single   # → ./index.html (fichier unique autonome)
+npm run web:preview        # prévisualisation du build web/dist/
+```
+
+### Déploiement sur GitHub Pages
+
+Le dépôt est configuré pour publier **depuis la branche** :
+**Settings → Pages → Build and deployment → Source** =
+**Deploy from a branch**, branche `master`, dossier `/ (root)`.
+
+GitHub Pages sert donc directement l'`index.html` single file présent à la
+racine du dépôt. Il est **versionné** et doit être régénéré puis commité après
+toute modification du front :
+
+```bash
+npm run web:build
+git add index.html
+git commit -m "build: régénérer l'index.html"
+git push
+```
+
+Le workflow [`.github/workflows/web-ci.yml`](./.github/workflows/web-ci.yml) ne
+déploie rien : il vérifie à chaque push / pull request que le front compile et
+que l'`index.html` versionné est bien à jour. Si le contrôle échoue, relancez
+`npm run web:build` et commitez le fichier.
 
 Le build utilise des chemins relatifs (`base: './'`), il fonctionne donc aussi
 bien sur `https://<utilisateur>.github.io/<dépôt>/` qu'avec un domaine
-personnalisé.
+personnalisé. Comme tout est inliné, aucun autre fichier n'est nécessaire à
+côté de l'`index.html`.
 
-Prérequis, une seule fois dans le dépôt :
-
-1. **Settings → Pages → Build and deployment → Source** : choisir
-   **GitHub Actions**.
-2. Si le dépôt est privé, GitHub Pages doit être disponible pour le plan utilisé.
-
-L'URL publique est affichée dans l'onglet **Actions** (job `deploy`) et dans
-**Settings → Pages**. Pour tester localement le rendu de production :
+Si le dépôt est privé, GitHub Pages doit être disponible pour le plan utilisé.
+L'URL publique est affichée dans **Settings → Pages**. Pour tester localement
+le rendu de production :
 
 ```bash
 npm run web:build
