@@ -27,6 +27,10 @@ dépendance d'exécution.
 
 ## Installation & commandes
 
+Prérequis : **Node.js 26 ou supérieur** (LTS depuis le 28/10/2026) et npm 11.
+La version attendue est indiquée dans `package.json` (`engines`) et `.nvmrc` ;
+`nvm use` ou `fnm use` sélectionne automatiquement la bonne version.
+
 ```bash
 npm install
 npm test            # exécute la suite Vitest

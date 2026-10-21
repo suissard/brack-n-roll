@@ -44,8 +44,5 @@ export default defineConfig({
     // Marge très large pour garantir qu'aucune ressource ne reste externe.
     assetsInlineLimit: 100_000_000,
     cssCodeSplit: false,
-    rollupOptions: {
-      output: { inlineDynamicImports: true },
-    },
   },
 });
