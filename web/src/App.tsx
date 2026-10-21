@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import logo from './assets/logo-brack-n-roll.png';
 import { ConsoleView } from './components/ConsoleView';
 import { FormatEditor } from './components/FormatEditor';
 import { TournamentView } from './spectator/TournamentView';
@@ -35,9 +36,7 @@ export function App() {
     <div className="app">
       <header className="app-header">
         <div className="brand">
-          <span className="brand-mark" aria-hidden="true">
-            B&amp;R
-          </span>
+          <img className="brand-logo" src={logo} alt="Logo Brack'n'Roll" aria-hidden="true" />
           <div className="brand-copy">
             <h1>Brack'n'Roll</h1>
             <p className="subtitle">

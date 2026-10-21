@@ -727,6 +727,13 @@ ol.timeline li {
     0 12px 28px -16px rgba(79, 140, 255, 0.9);
 }
 
+.brand-logo {
+  width: 44px;
+  height: 44px;
+  border-radius: 13px;
+  display: block;
+}
+
 .brand-copy h1 {
   font-size: 21px;
 }
